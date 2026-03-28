@@ -1,0 +1,183 @@
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: users
+// Document ID: {userId}
+// Fields:
+//   - name: string (required) - Player name
+//   - raheeKey: string (required) - Unique key
+//   - wins: number (required) - Win count
+//   - losses: number (required) - Loss count
+//   - role: string (optional) - admin, user
+//   - uid: string (optional) - UID
+//   - isApproved: boolean (optional) - Approval status
+//
+// Collection: rooms
+// Document ID: {roomId}
+// Fields:
+//   - id: string (optional)
+//   - roomKey: string (required)
+//   - hostUid: string (required)
+//   - status: string (required) - waiting, playing, finished
+//   - players: list (required) - Player objects
+//   - currentTurn: string (optional) - UID
+//   - winner: string (optional) - UID
+//   - createdAt: timestamp (required)
+//   - comparison: map (optional)
+//   - lastAction: map (optional)
+//
+// Collection: feedback
+// Document ID: {feedbackId}
+// Fields:
+//   - userName: string (required)
+//   - email: string (required)
+//   - rating: number (required) - 1-5
+//   - comment: string (required)
+//   - timestamp: timestamp (required)
+//
+// Collection: cards
+// Document ID: {cardId}
+// Fields:
+//   - id: string (required)
+//   - name: string (required)
+//   - symbol: string (required)
+//   - rank: string (required)
+//   - image: string (required)
+//   - details: string (required)
+//   - stats: map (required)
+//
+// Collection: game_logs
+// Document ID: {logId}
+// Fields:
+//   - uid: string (required)
+//   - userName: string (required)
+//   - mode: string (required)
+//   - timestamp: timestamp (required)
+//   - roomId: string (required)
+//   - status: string (required)
+//
+// ===============================================================
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && 
+             exists(/databases/$(database)/documents/users/786) && 
+             get(/databases/$(database)/documents/users/786).data.authUid == request.auth.uid;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && (
+        (resource != null && resource.data.authUid == request.auth.uid) ||
+        (request.resource != null && request.resource.data.authUid == request.auth.uid)
+      );
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['name', 'raheeKey']) &&
+             data.name is string && data.name.size() > 0 &&
+             data.raheeKey is string && data.raheeKey.size() > 0;
+    }
+
+    function isValidFeedback(data) {
+      return data.keys().hasAll(['userName', 'email', 'rating', 'comment', 'timestamp']) &&
+             data.userName is string && data.userName.size() > 0 &&
+             data.email is string &&
+             data.rating is number && data.rating >= 1 && data.rating <= 5 &&
+             data.comment is string && data.comment.size() > 0 &&
+             data.timestamp is timestamp;
+    }
+
+    function isValidRoom(data) {
+      return data.keys().hasAll(['status', 'players', 'createdAt', 'roomKey', 'hostUid']) &&
+             data.status in ['waiting', 'playing', 'finished'] &&
+             data.players is list &&
+             data.createdAt is timestamp &&
+             data.roomKey is string &&
+             data.hostUid is string;
+    }
+
+    function isValidCard(data) {
+      return data.keys().hasAll(['id', 'name', 'symbol', 'rank', 'image', 'details', 'stats']) &&
+             data.id is string && data.name is string &&
+             data.symbol is string && data.rank is string &&
+             data.image is string && data.details is string &&
+             data.stats is map;
+    }
+
+    function isValidGameLog(data) {
+      return data.keys().hasAll(['uid', 'userName', 'mode', 'timestamp', 'roomId', 'status']) &&
+             data.uid is string && data.userName is string &&
+             data.mode in ['solo', '1v1', 'multi'] &&
+             data.timestamp is timestamp &&
+             data.roomId is string &&
+             data.status in ['started', 'finished'];
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /connection_test/{docId} {
+      allow read: if true;
+    }
+
+    match /cards/{cardId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /users/{userId} {
+      // Allow reading any user profile for login check
+      allow read: if true;
+      
+      // Allow creation if authenticated and either it's the admin bootstrap or user's own doc
+      allow create: if isAuthenticated() && (
+        (userId == '786') || 
+        (request.resource.data.authUid == request.auth.uid)
+      );
+      
+      allow update: if isAuthenticated() && (
+        (resource.data.authUid == request.auth.uid) || 
+        isAdmin()
+      );
+      
+      allow delete: if isAdmin();
+    }
+
+    match /rooms/{roomId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidRoom(request.resource.data);
+      allow update: if isAuthenticated() && isValidRoom(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /feedback/{feedbackId} {
+      allow read: if isAdmin();
+      allow create: if isAuthenticated() && isValidFeedback(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /auth_logs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isAuthenticated();
+    }
+
+    match /game_logs/{logId} {
+      allow read: if isAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);
+      allow create: if isAuthenticated() && isValidGameLog(request.resource.data);
+      allow delete: if isAdmin();
+    }
+  }
+}
